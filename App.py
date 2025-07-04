@@ -1,4 +1,5 @@
 import tkinter as tk
+import tkinter.ttk as ttk
 import calendar
 import datetime
 import tkinter.filedialog as filedialog
@@ -6,104 +7,376 @@ import csv
 import tkinter.messagebox as mb
 from dateutil.relativedelta import relativedelta
 import uuid
+import json
+import winsound
 
 class CalendarApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Calendar and Reminder Application")
-        self.root.geometry("800x600") # Set a default window size
+        self.root.geometry("1000x600") # Wider window for sidebar
+
+        # Theme setup
+        self.current_theme = 'light'
+        self.setup_themes()
 
         # Configure root window for better resizing
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_columnconfigure(0, weight=0)  # Sidebar
+        self.root.grid_columnconfigure(1, weight=1)  # Calendar
+        self.root.grid_columnconfigure(2, weight=1)  # Reminders
         self.root.grid_rowconfigure(0, weight=1)
 
-        # Create frames with some styling
-        self.calendar_frame = tk.Frame(root, padx=10, pady=10, bg='#f0f0f0', relief=tk.GROOVE, borderwidth=2)
-        self.reminder_frame = tk.Frame(root, padx=10, pady=10, bg='#e0e0e0', relief=tk.GROOVE, borderwidth=2)
+        # Sidebar for today's reminders
+        self.sidebar_frame = ttk.Frame(root, padding=10)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
-        # Use grid layout for the main frames for better responsiveness
-        self.calendar_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.reminder_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        # Main frames
+        self.calendar_frame = ttk.Frame(root, padding=10)
+        self.reminder_frame = ttk.Frame(root, padding=10)
+        self.calendar_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        self.reminder_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
+        self.calendar_grid = None  # Placeholder for future calendar grid widget
 
         self.year = 2024
         self.month = 7
-
         self.reminders = {}
         self.current_date = None
 
-        self.create_calendar_widgets()
+        self.load_reminders()  # Load reminders from file on startup
+
+        self.create_sidebar_widgets()
         self.create_reminder_widgets()
         self.create_reminder_display()
+        self.create_calendar_widgets()
         self.create_menu()
 
+        self.update_sidebar()
         self.check_reminders()
 
+    def setup_themes(self):
+        style = ttk.Style()
+        # Light theme
+        style.theme_create('playful_light', parent='clam', settings={
+            '.': {
+                'configure': {
+                    'background': '#f9f6ff',
+                    'foreground': '#222',
+                    'font': ('Comic Sans MS', 10)
+                }
+            },
+            'TButton': {
+                'configure': {
+                    'background': '#ffe066',
+                    'foreground': '#222',
+                    'padding': 6,
+                    'relief': 'flat',
+                },
+                'map': {
+                    'background': [('active', '#ffd166')],
+                }
+            },
+            'TLabel': {
+                'configure': {
+                    'background': '#f9f6ff',
+                    'foreground': '#222',
+                }
+            },
+            'TFrame': {
+                'configure': {
+                    'background': '#f9f6ff',
+                }
+            },
+        })
+        # Dark theme
+        style.theme_create('playful_dark', parent='clam', settings={
+            '.': {
+                'configure': {
+                    'background': '#232946',
+                    'foreground': '#eebbc3',
+                    'font': ('Comic Sans MS', 10)
+                }
+            },
+            'TButton': {
+                'configure': {
+                    'background': '#eebbc3',
+                    'foreground': '#232946',
+                    'padding': 6,
+                    'relief': 'flat',
+                },
+                'map': {
+                    'background': [('active', '#ffd166')],
+                }
+            },
+            'TLabel': {
+                'configure': {
+                    'background': '#232946',
+                    'foreground': '#eebbc3',
+                }
+            },
+            'TFrame': {
+                'configure': {
+                    'background': '#232946',
+                }
+            },
+        })
+        style.theme_use('playful_light')
+
+    def toggle_theme(self):
+        style = ttk.Style()
+        if self.current_theme == 'light':
+            style.theme_use('playful_dark')
+            self.current_theme = 'dark'
+        else:
+            style.theme_use('playful_light')
+            self.current_theme = 'light'
+
+    def create_sidebar_widgets(self):
+        # Search bar
+        ttk.Label(self.sidebar_frame, text="🔍 Search Reminders", font=('Arial', 12, 'bold')).pack(pady=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add('write', lambda *args: self.update_search_results())
+        search_entry = ttk.Entry(self.sidebar_frame, textvariable=self.search_var)
+        search_entry.pack(fill=tk.X, padx=2, pady=(0, 8))
+
+        # Search results frame (scrollable)
+        self.search_results_canvas = tk.Canvas(self.sidebar_frame, height=120, borderwidth=0, highlightthickness=0)
+        self.search_results_frame = ttk.Frame(self.search_results_canvas)
+        self.search_results_scrollbar = ttk.Scrollbar(self.sidebar_frame, orient="vertical", command=self.search_results_canvas.yview)
+        self.search_results_canvas.configure(yscrollcommand=self.search_results_scrollbar.set)
+        self.search_results_canvas.pack(fill=tk.X, padx=2, pady=(0, 8), side=tk.TOP)
+        self.search_results_scrollbar.pack(fill=tk.Y, side=tk.RIGHT, padx=(0, 2))
+        self.search_results_canvas.create_window((0, 0), window=self.search_results_frame, anchor="nw")
+        self.search_results_frame.bind("<Configure>", lambda e: self.search_results_canvas.configure(scrollregion=self.search_results_canvas.bbox("all")))
+
+        # Today's reminders section
+        ttk.Label(self.sidebar_frame, text="⏰ Today's Reminders", font=('Arial', 14, 'bold')).pack(pady=(0, 10))
+        self.today_reminders_frame = ttk.Frame(self.sidebar_frame)
+        self.today_reminders_frame.pack(fill=tk.BOTH, expand=True)
+        self.update_search_results()
+
+    def update_search_results(self):
+        # Clear previous search results
+        for widget in self.search_results_frame.winfo_children():
+            widget.destroy()
+        query = self.search_var.get().strip().lower()
+        if not query:
+            return
+        results = []
+        for date, reminders in self.reminders.items():
+            for reminder in reminders:
+                if (query in reminder.get('title', '').lower() or query in reminder.get('desc', '').lower()):
+                    results.append((date, reminder))
+        if results:
+            for date, reminder in sorted(results, key=lambda x: (x[0], x[1].get('time', ''))):
+                text = f"{date} {reminder.get('time', 'N/A')}\n{reminder.get('title', '')}"
+                btn = ttk.Button(self.search_results_frame, text=text, style="Search.TButton", width=28, command=lambda d=date: self.jump_to_date(d))
+                btn.pack(anchor="w", pady=2, fill=tk.X)
+        else:
+            ttk.Label(self.search_results_frame, text="No results.", font=('Arial', 10, 'italic')).pack(anchor="w")
+
+    def jump_to_date(self, date):
+        try:
+            dt = datetime.datetime.strptime(date, "%Y-%m-%d")
+            self.year = dt.year
+            self.month = dt.month
+            self.current_date = date
+            self.update_calendar()
+            self.display_reminders(date)
+            self.date_entry.delete(0, tk.END)
+            self.date_entry.insert(0, date)
+        except Exception as e:
+            print(f"Error jumping to date: {e}")
+
+    def update_sidebar(self):
+        # Clear previous widgets
+        for widget in self.today_reminders_frame.winfo_children():
+            widget.destroy()
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        reminders = self.reminders.get(today, [])
+        if reminders:
+            reminders_sorted = sorted(reminders, key=lambda r: r.get('time', ''))
+            for reminder in reminders_sorted:
+                text = f"{reminder.get('time', 'N/A')} - {reminder.get('title', 'N/A')}\n{reminder.get('desc', '')}"
+                ttk.Label(self.today_reminders_frame, text="🎈 " + text, justify=tk.LEFT, wraplength=180).pack(anchor="w", pady=4, fill=tk.X)
+        else:
+            ttk.Label(self.today_reminders_frame, text="No reminders for today.", font=('Arial', 10, 'italic')).pack(anchor="w")
+
     def create_calendar_widgets(self):
-        # Month and Year Navigation frame with styling
-        nav_frame = tk.Frame(self.calendar_frame, bg='#f0f0f0')
-        nav_frame.pack(pady=10)
+        # Remove old calendar grid and navigation
+        for widget in self.calendar_frame.winfo_children():
+            widget.destroy()
 
-        self.prev_month_button = tk.Button(nav_frame, text="<", command=self.prev_month, font=('Arial', 10), bg='#cccccc')
-        self.prev_month_button.pack(side=tk.LEFT)
+        # Calendar title
+        self.calendar_title_label = ttk.Label(self.calendar_frame, text="🗓️ Calendar", font=('Arial', 18, 'bold'))
+        self.calendar_title_label.pack(pady=(10, 20))
 
-        self.month_year_label = tk.Label(nav_frame, text="", font=('Arial', 16, 'bold'), bg='#f0f0f0')
-        self.month_year_label.pack(side=tk.LEFT, padx=20)
+        # Digital clock-style dials (vertical stack)
+        self.dials_frame = ttk.Frame(self.calendar_frame)
+        self.dials_frame.pack(pady=10)
 
-        self.next_month_button = tk.Button(nav_frame, text=">", command=self.next_month, font=('Arial', 10), bg='#cccccc')
-        self.next_month_button.pack(side=tk.LEFT)
+        import calendar
+        now = datetime.datetime.now()
+        self.lockdial_year = now.year
+        self.lockdial_month = now.month
+        self.lockdial_day = now.day
 
-        # Calendar Grid with styling
-        self.calendar_grid = tk.Text(self.calendar_frame, height=10, width=30, font=('Courier New', 12), state='disabled', bg='#ffffff', fg='#333333')
-        self.calendar_grid.pack(fill=tk.BOTH, expand=True)
+        # Helper to get max day for current year/month
+        def get_max_day(year, month):
+            return calendar.monthrange(year, month)[1]
 
-        self.update_calendar()
-        self.calendar_grid.bind("<ButtonRelease-1>", self.date_selected)
+        def update_date_display():
+            self.year_label.config(text=f"{self.lockdial_year:04d}")
+            self.month_label.config(text=f"{self.lockdial_month:02d}")
+            self.day_label.config(text=f"{self.lockdial_day:02d}")
+            # Clamp day if needed
+            max_day = get_max_day(self.lockdial_year, self.lockdial_month)
+            if self.lockdial_day > max_day:
+                self.lockdial_day = max_day
+                self.day_label.config(text=f"{self.lockdial_day:02d}")
+            # Update current date and reminders
+            self.year = self.lockdial_year
+            self.month = self.lockdial_month
+            self.current_date = f"{self.lockdial_year}-{self.lockdial_month:02d}-{self.lockdial_day:02d}"
+            self.date_entry.delete(0, tk.END)
+            self.date_entry.insert(0, self.current_date)
+            self.display_reminders(self.current_date)
 
+        # Year controls
+        year_frame = ttk.Frame(self.dials_frame)
+        year_frame.pack(pady=8)
+        year_up = ttk.Button(year_frame, text="▲", width=2, command=lambda: self.change_year(1, update_date_display), style="Small.TButton")
+        year_up.pack()
+        self.year_label = ttk.Label(year_frame, text=f"{self.lockdial_year:04d}", font=('Courier', 44, 'bold'), width=7, anchor="center")
+        self.year_label.pack()
+        year_down = ttk.Button(year_frame, text="▼", width=2, command=lambda: self.change_year(-1, update_date_display), style="Small.TButton")
+        year_down.pack()
+
+        # Month controls
+        month_frame = ttk.Frame(self.dials_frame)
+        month_frame.pack(pady=8)
+        month_up = ttk.Button(month_frame, text="▲", width=2, command=lambda: self.change_month(1, update_date_display), style="Small.TButton")
+        month_up.pack()
+        self.month_label = ttk.Label(month_frame, text=f"{self.lockdial_month:02d}", font=('Courier', 44, 'bold'), width=5, anchor="center")
+        self.month_label.pack()
+        month_down = ttk.Button(month_frame, text="▼", width=2, command=lambda: self.change_month(-1, update_date_display), style="Small.TButton")
+        month_down.pack()
+
+        # Day controls
+        day_frame = ttk.Frame(self.dials_frame)
+        day_frame.pack(pady=8)
+        day_up = ttk.Button(day_frame, text="▲", width=2, command=lambda: self.change_day(1, update_date_display), style="Small.TButton")
+        day_up.pack()
+        self.day_label = ttk.Label(day_frame, text=f"{self.lockdial_day:02d}", font=('Courier', 44, 'bold'), width=5, anchor="center")
+        self.day_label.pack()
+        day_down = ttk.Button(day_frame, text="▼", width=2, command=lambda: self.change_day(-1, update_date_display), style="Small.TButton")
+        day_down.pack()
+
+        # Style for smaller buttons
+        style = ttk.Style()
+        style.configure("Small.TButton", font=("Arial", 12))
+
+        # Initial display
+        update_date_display()
+
+    def change_year(self, delta, update_callback):
+        self.lockdial_year += delta
+        if self.lockdial_year < 1900:
+            self.lockdial_year = 1900
+        if self.lockdial_year > 2100:
+            self.lockdial_year = 2100
+        update_callback()
+
+    def change_month(self, delta, update_callback):
+        self.lockdial_month += delta
+        if self.lockdial_month < 1:
+            self.lockdial_month = 12
+            self.lockdial_year -= 1
+        elif self.lockdial_month > 12:
+            self.lockdial_month = 1
+            self.lockdial_year += 1
+        if self.lockdial_year < 1900:
+            self.lockdial_year = 1900
+            self.lockdial_month = 1
+        if self.lockdial_year > 2100:
+            self.lockdial_year = 2100
+            self.lockdial_month = 12
+        update_callback()
+
+    def change_day(self, delta, update_callback):
+        import calendar
+        max_day = calendar.monthrange(self.lockdial_year, self.lockdial_month)[1]
+        self.lockdial_day += delta
+        if self.lockdial_day < 1:
+            self.lockdial_month -= 1
+            if self.lockdial_month < 1:
+                self.lockdial_month = 12
+                self.lockdial_year -= 1
+            self.lockdial_day = calendar.monthrange(self.lockdial_year, self.lockdial_month)[1]
+        elif self.lockdial_day > max_day:
+            self.lockdial_day = 1
+            self.lockdial_month += 1
+            if self.lockdial_month > 12:
+                self.lockdial_month = 1
+                self.lockdial_year += 1
+        if self.lockdial_year < 1900:
+            self.lockdial_year = 1900
+            self.lockdial_month = 1
+            self.lockdial_day = 1
+        if self.lockdial_year > 2100:
+            self.lockdial_year = 2100
+            self.lockdial_month = 12
+            self.lockdial_day = calendar.monthrange(self.lockdial_year, self.lockdial_month)[1]
+        update_callback()
 
     def create_reminder_widgets(self):
         # Frame for reminder input fields with styling
-        input_frame = tk.Frame(self.reminder_frame, bg='#e0e0e0')
+        input_frame = ttk.Frame(self.reminder_frame)
         input_frame.pack(pady=10, fill=tk.X)
 
         # Configure grid weights for input frame columns for better layout
         input_frame.grid_columnconfigure(0, weight=0) # Labels column
         input_frame.grid_columnconfigure(1, weight=1) # Entry fields column
 
-
-        tk.Label(input_frame, text="Date (YYYY-MM-DD):", font=('Arial', 10), bg='#e0e0e0').grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.date_entry = tk.Entry(input_frame, font=('Arial', 10))
+        ttk.Label(input_frame, text="📅 Date (YYYY-MM-DD):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.date_entry = ttk.Entry(input_frame)
         self.date_entry.grid(row=0, column=1, padx=5, pady=5, sticky="we")
 
-        tk.Label(input_frame, text="Time (HH:MM):", font=('Arial', 10), bg='#e0e0e0').grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.time_entry = tk.Entry(input_frame, font=('Arial', 10))
+        ttk.Label(input_frame, text="⏰ Time (HH:MM):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.time_entry = ttk.Entry(input_frame)
         self.time_entry.grid(row=1, column=1, padx=5, pady=5, sticky="we")
 
-        tk.Label(input_frame, text="Title:", font=('Arial', 10), bg='#e0e0e0').grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.title_entry = tk.Entry(input_frame, font=('Arial', 10))
+        ttk.Label(input_frame, text="🎉 Title:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.title_entry = ttk.Entry(input_frame)
         self.title_entry.grid(row=2, column=1, padx=5, pady=5, sticky="we")
 
-        tk.Label(input_frame, text="Description:", font=('Arial', 10), bg='#e0e0e0').grid(row=3, column=0, padx=5, pady=5, sticky="w")
-        self.desc_entry = tk.Entry(input_frame, font=('Arial', 10))
+        ttk.Label(input_frame, text="📝 Description:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
+        self.desc_entry = ttk.Entry(input_frame)
         self.desc_entry.grid(row=3, column=1, padx=5, pady=5, sticky="we")
 
-        tk.Label(input_frame, text="Recurrence (daily, weekly, monthly):", font=('Arial', 10), bg='#e0e0e0').grid(row=4, column=0, padx=5, pady=5, sticky="w")
-        self.recurrence_entry = tk.Entry(input_frame, font=('Arial', 10))
+        ttk.Label(input_frame, text="🔁 Recurrence (daily, weekly, monthly):").grid(row=4, column=0, padx=5, pady=5, sticky="w")
+        self.recurrence_entry = ttk.Entry(input_frame)
         self.recurrence_entry.grid(row=4, column=1, padx=5, pady=5, sticky="we")
 
-        self.add_reminder_button = tk.Button(self.reminder_frame, text="Add Reminder", command=self.add_reminder, font=('Arial', 10, 'bold'), bg='#a0a0ff', fg='#ffffff')
+        ttk.Label(input_frame, text="🏁 End Date (YYYY-MM-DD):").grid(row=5, column=0, padx=5, pady=5, sticky="w")
+        self.end_date_entry = ttk.Entry(input_frame)
+        self.end_date_entry.grid(row=5, column=1, padx=5, pady=5, sticky="we")
+
+        ttk.Label(input_frame, text="🏷️ Tags (comma-separated):").grid(row=6, column=0, padx=5, pady=5, sticky="w")
+        self.tags_entry = ttk.Entry(input_frame)
+        self.tags_entry.grid(row=6, column=1, padx=5, pady=5, sticky="we")
+
+        self.add_reminder_button = ttk.Button(self.reminder_frame, text="➕ Add Reminder", command=self.add_reminder)
         self.add_reminder_button.pack(pady=10)
 
         self.editing_reminder_id = None
 
     def create_reminder_display(self):
-        tk.Label(self.reminder_frame, text="Reminders:", font=('Arial', 12, 'underline'), bg='#e0e0e0').pack(pady=(10, 5), anchor="w")
+        ttk.Label(self.reminder_frame, text="📋 Reminders:", font=('Arial', 12, 'underline')).pack(pady=(10, 5), anchor="w")
         # Use a ScrolledText widget or a Frame with a Scrollbar for potentially many reminders
         # For simplicity here, we'll continue using a Frame and pack items into it
-        self.reminder_display_frame = tk.Frame(self.reminder_frame, bg='#d0d0d0', relief=tk.SUNKEN, borderwidth=1, padx=5, pady=5)
+        self.reminder_display_frame = ttk.Frame(self.reminder_frame)
         self.reminder_display_frame.pack(fill=tk.BOTH, expand=True)
-
 
     def create_menu(self):
         menubar = tk.Menu(self.root)
@@ -111,6 +384,10 @@ class CalendarApp:
         filemenu.add_command(label="Export Reminders", command=self.export_reminders)
         filemenu.add_command(label="Import Reminders", command=self.import_reminders)
         menubar.add_cascade(label="File", menu=filemenu)
+        # Theme toggle
+        thememenu = tk.Menu(menubar, tearoff=0)
+        thememenu.add_command(label="Toggle Light/Dark Theme", command=self.toggle_theme)
+        menubar.add_cascade(label="Theme", menu=thememenu)
         self.root.config(menu=menubar)
 
     def update_calendar(self):
@@ -230,35 +507,39 @@ class CalendarApp:
         for widget in self.reminder_display_frame.winfo_children():
             widget.destroy()
 
-        tk.Label(self.reminder_display_frame, text=f"Reminders for {date}:", font=('Arial', 10, 'bold'), bg='#d0d0d0').pack(pady=(0, 5), anchor="w")
+        ttk.Label(self.reminder_display_frame, text=f"📅 Reminders for {date}:", font=('Arial', 10, 'bold')).pack(pady=(0, 5), anchor="w")
 
 
         if date in self.reminders and self.reminders[date]:
             reminders_list = sorted(self.reminders[date], key=lambda r: r['time']) # Sort by time
             for i, reminder in enumerate(reminders_list):
                 # Create a frame for each reminder item
-                reminder_item_frame = tk.Frame(self.reminder_display_frame, bg='#ffffff', relief=tk.FLAT, borderwidth=1, padx=5, pady=5)
+                reminder_item_frame = ttk.Frame(self.reminder_display_frame)
                 reminder_item_frame.pack(fill=tk.X, pady=2)
                 reminder_item_frame.grid_columnconfigure(0, weight=1) # Text label column
 
                 # Reminder details label
                 reminder_text = f"Time: {reminder.get('time', 'N/A')}, Title: {reminder.get('title', 'N/A')}\nDesc: {reminder.get('desc', 'N/A')}\nRecurrence: {reminder.get('recurrence', 'None')}"
-                tk.Label(reminder_item_frame, text=reminder_text, justify=tk.LEFT, wraplength=300, font=('Arial', 9), bg='#ffffff').grid(row=0, column=0, sticky="w")
+                if reminder.get('end_date', ''):
+                    reminder_text += f"\nEnd Date: {reminder.get('end_date', '')}"
+                if reminder.get('tags', []):
+                    reminder_text += f"\nTags: {', '.join(reminder.get('tags', []))}"
+                ttk.Label(reminder_item_frame, text=reminder_text, justify=tk.LEFT, wraplength=300, font=('Arial', 9)).grid(row=0, column=0, sticky="w")
 
                 # Button frame for edit/delete
-                button_frame = tk.Frame(reminder_item_frame, bg='#ffffff')
+                button_frame = ttk.Frame(reminder_item_frame)
                 button_frame.grid(row=0, column=1, sticky="e")
 
                 # Add Edit button
-                edit_button = tk.Button(button_frame, text="Edit", font=('Arial', 8), bg='#ffffa0', command=lambda r_id=reminder['id']: self.edit_reminder(date, r_id))
+                edit_button = ttk.Button(button_frame, text="✏️ Edit", command=lambda r_id=reminder['id']: self.edit_reminder(date, r_id))
                 edit_button.pack(side=tk.LEFT, padx=2)
 
                 # Add Delete button
-                delete_button = tk.Button(button_frame, text="Delete", font=('Arial', 8), bg='#ffb0b0', command=lambda r_id=reminder['id']: self.delete_reminder(date, r_id))
+                delete_button = ttk.Button(button_frame, text="🗑️ Delete", command=lambda r_id=reminder['id']: self.delete_reminder(date, r_id))
                 delete_button.pack(side=tk.LEFT)
 
         else:
-            tk.Label(self.reminder_display_frame, text="No reminders for this date.", font=('Arial', 10, 'italic'), bg='#d0d0d0').pack()
+            ttk.Label(self.reminder_display_frame, text="No reminders for this date.", font=('Arial', 10, 'italic')).pack()
 
     def add_reminder(self):
         date = self.date_entry.get()
@@ -266,6 +547,8 @@ class CalendarApp:
         title = self.title_entry.get()
         desc = self.desc_entry.get()
         recurrence = self.recurrence_entry.get().lower()
+        end_date = self.end_date_entry.get().strip()
+        tags = [t.strip() for t in self.tags_entry.get().split(',') if t.strip()]
 
         if not date or not title:
             mb.showerror("Input Error", "Date and Title are required.")
@@ -288,6 +571,13 @@ class CalendarApp:
         if recurrence not in valid_recurrences:
              mb.showerror("Input Error", "Invalid recurrence. Please use daily, weekly, or monthly.")
              return
+
+        if end_date:
+            try:
+                datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            except ValueError:
+                mb.showerror("Input Error", "Invalid end date format. Please use YYYY-MM-DD.")
+                return
 
         if self.editing_reminder_id:
             # Find the reminder across all dates (in case the date was changed during edit)
@@ -319,14 +609,19 @@ class CalendarApp:
                     'time': time,
                     'title': title,
                     'desc': desc,
-                    'recurrence': recurrence
+                    'recurrence': recurrence,
+                    'end_date': end_date,
+                    'tags': tags
                 })
                 mb.showinfo("Success", "Reminder updated successfully.")
             else:
                  mb.showerror("Error", "Could not find reminder to update.")
 
             self.editing_reminder_id = None
-            self.add_reminder_button.config(text="Add Reminder", bg='#a0a0ff')
+            self.add_reminder_button.config(text="➕ Add Reminder") # No bg for ttk
+            self.save_reminders()
+            self.update_sidebar()
+            self.update_search_results()
         else:
             new_reminder = {
                 'id': str(uuid.uuid4()),
@@ -334,7 +629,9 @@ class CalendarApp:
                 'time': time,
                 'title': title,
                 'desc': desc,
-                'recurrence': recurrence
+                'recurrence': recurrence,
+                'end_date': end_date,
+                'tags': tags
             }
 
             if date not in self.reminders:
@@ -342,7 +639,9 @@ class CalendarApp:
 
             self.reminders[date].append(new_reminder)
             mb.showinfo("Success", "Reminder added successfully.")
-
+            self.save_reminders()
+            self.update_sidebar()
+            self.update_search_results()
 
         # Clear input fields
         self.date_entry.delete(0, tk.END)
@@ -350,6 +649,8 @@ class CalendarApp:
         self.title_entry.delete(0, tk.END)
         self.desc_entry.delete(0, tk.END)
         self.recurrence_entry.delete(0, tk.END)
+        self.end_date_entry.delete(0, tk.END)
+        self.tags_entry.delete(0, tk.END)
 
         # Update display for the date where the reminder was added/updated
         self.current_date = date # Set current date to the modified date
@@ -373,9 +674,13 @@ class CalendarApp:
                     self.desc_entry.insert(0, reminder['desc'])
                     self.recurrence_entry.delete(0, tk.END)
                     self.recurrence_entry.insert(0, reminder['recurrence'])
+                    self.end_date_entry.delete(0, tk.END)
+                    self.end_date_entry.insert(0, reminder.get('end_date', ''))
+                    self.tags_entry.delete(0, tk.END)
+                    self.tags_entry.insert(0, ', '.join(reminder.get('tags', [])))
 
                     self.editing_reminder_id = reminder_id
-                    self.add_reminder_button.config(text="Update Reminder", bg='#a0ffa0') # Change button text and color
+                    self.add_reminder_button.config(text="✏️ Update Reminder") # No bg for ttk
                     break
 
     def delete_reminder(self, date, reminder_id):
@@ -390,10 +695,11 @@ class CalendarApp:
 
             if index_to_delete != -1:
                  del self.reminders[date][index_to_delete]
-                 # If no reminders left for the date, remove the date entry
                  if not self.reminders[date]:
                      del self.reminders[date]
-
+                 self.save_reminders()
+                 self.update_sidebar()
+                 self.update_search_results()
                  mb.showinfo("Success", "Reminder deleted successfully.")
                  # Update the display for the current date
                  if self.current_date:
@@ -443,21 +749,30 @@ class CalendarApp:
             reminders_today = self.reminders[current_date_str]
             for reminder in reminders_today:
                 if reminder.get('recurrence', '') == "" and reminder.get('time', '') == current_time_str: # Use .get with default
-                    # Assuming notify_reminder is available globally or passed
-                    # notify_reminder(f"Reminder: {reminder['title']} at {reminder['time']}")
+                    # Play sound notification
+                    winsound.Beep(1000, 500)  # 1000 Hz, 500 ms
                     print(f"Notification: Reminder: {reminder.get('title', 'N/A')} at {reminder.get('time', 'N/A')}") # Use .get
 
         for date, reminders_list in self.reminders.items():
             for reminder in reminders_list:
                 recurrence = reminder.get('recurrence', '')
                 if recurrence in ["daily", "weekly", "monthly"]:
+                    end_date_str = reminder.get('end_date', '')
+                    if end_date_str:
+                        try:
+                            end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                        except ValueError:
+                            end_date = None
+                    else:
+                        end_date = None
                     next_occurrence_date = self.calculate_next_occurrence(reminder.get('date', ''), recurrence, current_date) # Use .get
 
-                    if next_occurrence_date and next_occurrence_date == current_date and reminder.get('time', '') == current_time_str: # Use .get
-                         # Assuming notify_reminder is available globally or passed
-                         # notify_reminder(f"Recurring Reminder: {reminder['title']} at {reminder['time']}")
-                         print(f"Notification: Recurring Reminder: {reminder.get('title', 'N/A')} at {reminder.get('time', 'N/A')} (originally on {reminder.get('date', 'N/A')})") # Use .get
-
+                    # Only trigger if current_date <= end_date (or no end_date)
+                    if next_occurrence_date and next_occurrence_date == current_date and reminder.get('time', '') == current_time_str:
+                        if not end_date or current_date <= end_date:
+                            # Play sound notification
+                            winsound.Beep(1200, 500)  # 1200 Hz, 500 ms
+                            print(f"Notification: Recurring Reminder: {reminder.get('title', 'N/A')} at {reminder.get('time', 'N/A')} (originally on {reminder.get('date', 'N/A')})") # Use .get
 
         self.root.after(60000, self.check_reminders)
 
@@ -567,7 +882,9 @@ class CalendarApp:
 
 
             print(f"Successfully imported {imported_count} reminders from {file_path}")
-
+            self.save_reminders()
+            self.update_sidebar()
+            self.update_search_results()
             if self.current_date:
                 self.display_reminders(self.current_date)
             self.update_calendar() # Update calendar highlighting
@@ -578,6 +895,25 @@ class CalendarApp:
         except Exception as e:
             print(f"Error importing reminders: {e}")
 
+    def save_reminders(self):
+        try:
+            with open("reminders.json", "w", encoding="utf-8") as f:
+                json.dump(self.reminders, f, indent=2)
+        except Exception as e:
+            print(f"Error saving reminders: {e}")
+
+    def load_reminders(self):
+        try:
+            with open("reminders.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Convert keys to str and values to list of dicts
+                self.reminders = {str(k): v for k, v in data.items()}
+        except FileNotFoundError:
+            self.reminders = {}
+        except Exception as e:
+            print(f"Error loading reminders: {e}")
+            self.reminders = {}
+
 
 # Assuming notify_reminder is defined elsewhere, e.g.:
 # def notify_reminder(message):
@@ -587,4 +923,5 @@ class CalendarApp:
 if __name__ == '__main__':
     root = tk.Tk()
     app = CalendarApp(root)
-    print("Styling and layout improvements applied.")
+    print("Styling and layout improvements applied. - BABA ")
+    root.mainloop()
