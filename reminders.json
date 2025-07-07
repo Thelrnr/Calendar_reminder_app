@@ -1,0 +1,30 @@
+{
+  "2025-12-04": [
+    {
+      "id": "ee52c4ee-049e-4527-ab27-d9c3f6e3f8c0",
+      "date": "2025-12-04",
+      "time": "00:00",
+      "title": "pagal birthday",
+      "desc": "her day",
+      "recurrence": "daily",
+      "end_date": "2025-12-04",
+      "tags": [
+        "birthday"
+      ]
+    }
+  ],
+  "2025-07-05": [
+    {
+      "id": "d8a8e63b-21b5-457b-9e8a-6c3d46e1d7de",
+      "date": "2025-07-05",
+      "time": "12:00",
+      "title": "birthday",
+      "desc": "my_world",
+      "recurrence": "daily",
+      "end_date": "2025-07-22",
+      "tags": [
+        "important"
+      ]
+    }
+  ]
+}
